@@ -1,0 +1,6 @@
+2D Likelihood Fitter Simulation
+===============================
+
+flatfit is a Monte Carlo simulation of flat and simplified scintillator
+detector, a testing environment for a likelihood-based vertex fitter algorithm.
+

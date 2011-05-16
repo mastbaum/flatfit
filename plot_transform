@@ -1,0 +1,24 @@
+# gnuplot script to plot the debugging output from flatfit.py (files local and global)
+
+set title "Photon positions, directions, and vectors to hit PMT"
+set xlabel "x"
+set ylabel "y"
+
+set parametric
+set multiplot
+
+r = 1.0
+fx(t) = r*cos(t)
+fy(t) = r*sin(t)
+
+plot fx(t),fy(t) title "" ls 0
+
+unset parametric
+
+plot "./local" using 1:2:3:4 title "local" with vec, "./global" using 1:2:3:4 title "global"  with vec lc 2 lt 2
+
+set xrange [-1:1]
+set yrange [-1:1]
+
+unset multiplot
+
