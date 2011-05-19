@@ -10,29 +10,20 @@
 import sys
 import math, random
 import numpy
-from UserDict import UserDict
 from matplotlib import pyplot as plt
-from matplotlib import cm, colors
-from mpl_toolkits.mplot3d import Axes3D
-from pylab import meshgrid
+from matplotlib import cm
 
 # detector parameters
 npmts = 10
 radius = 1.0
-attenuation_length = 10
+absorption_length = 10
 scattering_length = 10
 
-tracking = False
+# configuration
+tracking = True
 debug = False
 debug_hardcore = False
 if debug_hardcore: debug = True
-
-def pick_charge(mu=1.0, sigma=1.0):
-  '''returns a gaussian-distributed single photoelectron charge'''
-  mu = 1.0
-  sigma = 1.0
-  q = random.gauss(mu, sigma)
-  return max(0.0, q)
 
 def plot_hit_distribution_polar(ev, pos=None):
   '''polar plot of hit distribution for a single event'''
@@ -115,26 +106,31 @@ def histogram_time_all(t):
     ax.set_xbound(0,2)
     i += 1
 
-def q_vs_t_all(q, t, pos=None):
-  npmts = len(q)
+def plot_pdfs(pdfs, pos=None):
   cols = min(npmts, 5)
   rows = math.ceil(npmts/cols)
-  f = plt.figure(figsize=(2,2), facecolor='white')
+  f = plt.figure(figsize=(1,3), facecolor='white')
   title = 'Time vs Charge Distributions'
-  if pos is not None: title += (' ' + str(pos))
   f.suptitle(title, fontsize=18)
-  #plt.subplots_adjust(hspace=0.4,wspace=0.4)
-  i = 0
-  while(i < npmts):
-    ax = plt.subplot(int(rows), int(cols), int(i+1))
-    h, xedges, yedges = numpy.histogram2d(t[i], q[i], bins=(50,50))
-    extent = [yedges[0], yedges[-1], xedges[-1], xedges[0]]
-    ax.imshow(h, extent=extent, interpolation='nearest', aspect='equal')
-    ax.set_title('Charge vs time, PMT ' + str(i), fontsize=12)
-    ax.set_xbound(0,2)
+  for ipdf in range(len(pdfs)):
+    pdf = pdfs[ipdf]
+    ax = plt.subplot(int(rows), int(cols), int(ipdf+1))
+    extent = [pdf.yedges[0], pdf.yedges[-1], pdf.xedges[-1], pdf.xedges[0]]
+    ax.imshow(pdf.h, extent=extent, interpolation='nearest', aspect='equal')
+    ax.set_title('Time vs charge, PMT ' + str(ipdf), fontsize=12)
+    ax.set_xbound(0,5)
     ax.set_ybound(0,2)
-    i += 1
 
+def plot_tracks(tx, ty):
+  from pylab import linspace
+  an = numpy.arange(0, 2 * math.pi, 0.01)
+  f = plt.figure(figsize=(2, 2), facecolor='white')
+  a = plt.plot(numpy.cos(an), numpy.sin(an), 'b-', tx, ty, 'ro-')
+  plt.title('All tracks')
+  plt.xlabel('x')
+  plt.ylabel('y')
+
+# data classes
 class PMT:
   '''holds a pmt's total charge, hit time, and number of photoelectrons for a
   single event.
@@ -156,17 +152,52 @@ class Event:
     for i in range(npmts):
       self.pmts.append(PMT())
 
-def get_hit_pmt_position(position):
+class Hist2D:
+  '''holds a 2d histogram along with bin edges'''
+  def __init__(self, h, xe, ye):
+    self.h = h
+    self.xedges = xe
+    self.yedges = ye
+
+# analysis functions
+def make_pdfs(events):
+  n = len(events)
+  q = [None] * npmts
+  t = [None] * npmts
+  for event in events:
+    for ipmt in range(len(event.pmts)):
+      charge = event.pmts[ipmt].q
+      time = event.pmts[ipmt].t
+      try:
+        q[ipmt].append(charge)
+        t[ipmt].append(time)
+      except AttributeError:
+        q[ipmt] = [charge]
+        t[ipmt] = [time]
+
+  pdfs = []
+  for ipmt in range(npmts):
+    nph = numpy.histogram2d(t[ipmt], q[ipmt], bins=(50,50))
+    h = Hist2D(*nph)
+    pdfs.append(h)
+
+  return pdfs
+
+# simulation functions
+def pick_charge(mu=1.0, sigma=1.0):
+  '''returns a gaussian-distributed single photoelectron charge'''
+  mu = 1.0
+  sigma = 1.0
+  q = random.gauss(mu, sigma)
+  return max(0.0, q)
+
+def get_hit_pmt_position(position, theta):
   '''given a photon position, picks a random momentum and find the distance to
   the pmt it will hit, and the angle (in detector coordinates) to that pmt.
   '''
   event_x = position[0]
   event_y = position[1]
   event_r = math.sqrt(event_x**2 + event_y**2)
-  if position == (0.0, 0.0):
-    theta = 0.0
-  else:
-    theta = random.vonmisesvariate(0, 0)
 
   a = 2.0 * (event_x*math.cos(theta) + event_y*math.sin(theta))
   ray_len = -a/2 + 0.5 * math.sqrt(a**2 - 4*(event_r**2 - radius**2))
@@ -174,9 +205,9 @@ def get_hit_pmt_position(position):
   pmt_y = ray_len*math.sin(theta) + event_y
   angle_to_pmt = math.atan2(pmt_y, pmt_x)
 
-  return ray_len, theta, angle_to_pmt
+  return ray_len, (pmt_x, pmt_y), angle_to_pmt
 
-def simulate(position, photons_per_event, processes):
+def simulate(position, theta, photons_per_event, processes):
   '''simulate propagates optical photons to pmts.
 
   input: position: either an (x,y) tuple or 'random'. the latter will result in
@@ -220,7 +251,7 @@ def simulate(position, photons_per_event, processes):
     reached_pmt = False
     kill_photon = False
     while not reached_pmt:
-      ray_len, theta, angle_to_pmt = get_hit_pmt_position(pos)
+      ray_len, pmt_pos, angle_to_pmt = get_hit_pmt_position(pos, theta)
 
       interaction_lengths = {'pmt': ray_len}
       for process in processes:
@@ -255,7 +286,9 @@ def simulate(position, photons_per_event, processes):
           print '  x:', x
           print '  y:', y
           print '  r:', r
+
         pos = (x, y)
+        theta = random.vonmisesvariate(0, 0) # isotropic scattering
 
         if tracking:
           track_x.append(x)
@@ -266,6 +299,9 @@ def simulate(position, photons_per_event, processes):
     if kill_photon: continue
  
     pmtid = int(math.floor((angle_to_pmt + math.pi) / (2 * math.pi) * npmts))
+    if tracking:
+      track_x.append(pmt_pos[0])
+      track_y.append(pmt_pos[1])
     if debug: print ' hit pmt', pmtid, math.degrees(angle_to_pmt)
 
     event.pmts[pmtid].npe += 1
@@ -276,16 +312,35 @@ def simulate(position, photons_per_event, processes):
 
   return event, track_x, track_y
 
-def spectrum_flat():
-  return 100
+# main
+if __name__ == '__main__':
+  processes = {}
+  processes['scattering'] = [random.expovariate(1.0 / scattering_length) for i in range(int(1e6))]
+  processes['absorption'] = [random.expovariate(1.0 / absorption_length) for i in range(int(1e6))]
 
+  events = []
+  for i in range(1):
+    if i%10 == 0: print i
+    pos = (0.5, 0.0)
+    theta = random.vonmisesvariate(0, 0)
+    ev, tx, ty = simulate(pos, theta, 50, processes)
+    events.append(ev)
+
+    if tracking: plot_tracks(tx,ty)
+
+  pdfs = make_pdfs(events)
+  plot_pdfs(pdfs, pos=pos)
+
+  plt.show()
+
+# testing functions
 def test_process(process, nphotons):
   processes = {}
-  position = (0.0, 0.0)
+  position = (0.75, 0.0)
   for j in [1000, 100, 1, 0.1]:
     print process, 'length =', j, '...'
     processes[process] = [random.expovariate(1.0/j) for i in range(int(1e6))]
-    ev, tx, ty = simulate(position, nphotons, processes)
+    ev, tx, ty = simulate(position, 0.2, nphotons, processes)
     plot_hit_distribution_polar(ev, pos = 'lamba=' + str(j))
     f = plt.figure(figsize=(2,2), facecolor='white')
     plt.title('lambda='+str(j))
@@ -293,22 +348,5 @@ def test_process(process, nphotons):
     plt.ylim(-1,1)
     p = plt.plot(tx,ty,marker='o')
   plt.show()
-
-# main
-if __name__ == '__main__':
-  test_process('scattering', nphotons=10)
-
-  #events = []
-  #for position in [(-0.5, 0.0), (0.0, 0.0), (0.5, 0.0)]:
-  #  print '**', position, '***'
-  #  for ev in range(100):
-  #    ev, tx, ty = simulate(position, spectrum_flat())
-  #    plot_hit_distribution_polar(ev, pos=position)
-  #    events.append(ev)
-
-  #histogram_nhit(events)
-  #histogram_q(events)
-  #histogram_qpe(events)
-
-  #plt.show()
+  sys.exit(0)
 
