@@ -15,13 +15,16 @@ from matplotlib import cm, colors
 from mpl_toolkits.mplot3d import Axes3D
 from pylab import meshgrid
 
+# detector parameters
 npmts = 10
 radius = 1.0
 attenuation_length = 10
 scattering_length = 10
-debug = False
-debug_hardcore = False
 
+tracking = False
+debug = True
+debug_hardcore = False
+if debug_hardcore: debug = True
 
 def pick_charge(mu=1.0, sigma=1.0):
   '''returns a gaussian-distributed single photoelectron charge'''
@@ -185,19 +188,16 @@ def get_hit_pmt_position(position):
   event_y = position[1]
   event_r = math.sqrt(event_x**2 + event_y**2)
   theta = random.vonmisesvariate(0, 0)
-  if position == (0.0, 0.0, 0.0):
-    ray_len = radius
-    angle_to_pmt = theta - math.pi
-  else:
-    a = 2.0 * (event_x*math.cos(theta) + event_y*math.sin(theta))
-    ray_len = -a/2 + 0.5 * math.sqrt(a**2 - 4*(event_r**2 - radius**2))
-    pmt_x = ray_len*math.cos(theta) + event_x
-    pmt_y = ray_len*math.sin(theta) + event_y
-    angle_to_pmt = math.atan2(pmt_y, pmt_x)
+
+  a = 2.0 * (event_x*math.cos(theta) + event_y*math.sin(theta))
+  ray_len = -a/2 + 0.5 * math.sqrt(a**2 - 4*(event_r**2 - radius**2))
+  pmt_x = ray_len*math.cos(theta) + event_x
+  pmt_y = ray_len*math.sin(theta) + event_y
+  angle_to_pmt = math.atan2(pmt_y, pmt_x)
 
   return ray_len, theta, angle_to_pmt
 
-def simulate(position, photons_per_event):
+def simulate(position, photons_per_event, processes):
   '''simulate propagates optical photons to pmts.
 
   input: position: either an (x,y) tuple or 'random'. the latter will result in
@@ -206,10 +206,14 @@ def simulate(position, photons_per_event):
          photons_per_event: number of photons to throw at this location, cf.
                             a 'photon bomb'
 
+         processes: a dictionary of the interaction lengths for various photon
+                    processes
+
   output: returns a Event including the simulated position and a list of PMT
           objects (including unhit PMTs).
   '''
   event = Event()
+
   if position is 'random':
     event_r = radius + 1
     while event_r > radius:
@@ -222,62 +226,63 @@ def simulate(position, photons_per_event):
   track_x = []
   track_y = []
 
-  # loop over this event's photons
   for photon in range(photons_per_event):
     pos = (event_x, event_y)
-
     event_r = math.sqrt(event_x**2 + event_y**2)
-    if debug: print 'photon', photon
-    if debug: print ' start',pos,'r =',event_r
-    track_x.append(event_x)
-    track_y.append(event_y)
+
+    if debug:
+      print 'photon', photon
+      print ' start', pos, 'r =', event_r
+
+    if tracking:
+      track_x.append(event_x)
+      track_y.append(event_y)
 
     reached_pmt = False
-    kill_photon = False
     while not reached_pmt:
       ray_len, theta, angle_to_pmt = get_hit_pmt_position(pos)
-      # scattering (isotropic reemission)
-      if abs(ray_len) < random.expovariate(1.0/scattering_length):
-        # absorption
-        if abs(ray_len) > random.expovariate(1.0/attenuation_length):
-          kill_photon = True
-          break
-        reached_pmt = True
-      else:
-        scattering_distance = random.uniform(0, abs(ray_len)) # uniform?
-        # absorption before it can scatter?
-        if abs(scattering_distance) > random.expovariate(1.0/attenuation_length):
-          kill_photon = True
-          break
-        new_x = pos[0] + scattering_distance * math.cos(theta)
-        new_y = pos[1] + scattering_distance * math.sin(theta)
-        new_r = math.sqrt(new_x**2 + new_y**2)
-        if debug: print ' scattered', pos,'r =',new_r
-        if debug_hardcore:
-          print '  abs(ray_len):',abs(ray_len)
-          print '  scattering_dist:',scattering_distance
-          print '  theta',theta
-          print '  pos[0]:',pos[0]
-          print '  pos[1]:',pos[1]
-          print '  new_x:',new_x
-          print '  new_y:',new_y
-          print '  new_r:',new_r
-          if new_r > 1: raise Exception
-        pos = (new_x, new_y)
-        track_x.append(new_x)
-        track_y.append(new_y)
- 
-    if kill_photon:
-      if debug: print ' killed photon'
-      continue
 
-    pmtid = int(math.floor((angle_to_pmt+math.pi)/(2*math.pi) * npmts))
+      interaction_lengths = {'pmt': ray_len}
+      for process in processes:
+        interaction_lengths[process] = random.expovariate(processes[process])
+      process = min(interaction_lengths, key = interaction_lengths.get)
+
+      if process is 'pmt':
+        reached_pmt = True
+
+      if process is 'absorption':
+        if debug: print 'photon absorbed'
+        break
+
+      if process is 'scattering':
+        x = pos[0] + interaction_lengths[process] * math.cos(theta)
+        y = pos[1] + interaction_lengths[process] * math.sin(theta)
+        r = math.sqrt(x**2 + y**2)
+        if r > 1: raise ValueError
+
+        if debug: print ' scattered', pos, 'r =', r
+        if debug_hardcore:
+          print '  abs(ray_len):', abs(ray_len)
+          print '  interaction_length:', interaction_lengths[process]
+          print '  theta', theta
+          print '  pos[0]:', pos[0]
+          print '  pos[1]:', pos[1]
+          print '  x:', x
+          print '  y:', y
+          print '  r:', r
+        pos = (x, y)
+
+        if tracking:
+          track_x.append(x)
+          track_y.append(y)
+
+        continue
+ 
+    pmtid = int(math.floor((angle_to_pmt + math.pi) / (2 * math.pi) * npmts))
     if debug: print ' hit pmt', pmtid, math.degrees(angle_to_pmt)
 
     event.pmts[pmtid].npe += 1
-
     event.pmts[pmtid].q += 1.0 #max(pick_charge(), 0.0)
-
     # earliest photon time
     if (ray_len < event.pmts[pmtid].t) or (event.pmts[pmtid].t == 0.0):
       event.pmts[pmtid].t = abs(ray_len)
@@ -285,28 +290,32 @@ def simulate(position, photons_per_event):
   return event, track_x, track_y
 
 def spectrum_flat():
-  return 1000
+  return 100
 
-def test_scattering():
-  position = (0.5, 0.0)
-  attenuation_length = 100 * radius
-  for j in [100, 1, 0.1, 0.01, 0.001]:
-    exec 'scattering_length = ' + str(j) in globals()
-    ev, tx, ty = simulate(position, spectrum_flat())
-    plot_hit_distribution_polar(ev, pos=position)
+def test_scattering(processes):
+  position = (0.75, 0.0)
+  processes['attenuation'] = 100 * radius
+  for j in [100, 1, 0.1, 0.05]:
+    processes['scattering'] = j
+    ev, tx, ty = simulate(position, spectrum_flat(), processes)
+    plot_hit_distribution_polar(ev, pos=j) #position)
   plt.show()
 
 def test_absorption():
-  position = (0.5, 0.0)
-  for j in [10, 1, 0.5, 0.1, 0.01]:
-    exec 'attenuation_length = ' + str(j) in globals()
-    ev, tx, ty = simulate(position, spectrum_flat())
-    plot_hit_distribution_polar(ev, pos=position)
+  position = (0.75, 0.0)
+  processes['scattering'] = 100 * radius
+  for j in [10, 1, 0.1, 0.05]:
+    processes['attenuation'] = j
+    ev, tx, ty = simulate(position, spectrum_flat(), processes)
+    plot_hit_distribution_polar(ev, pos=j) #position)
   plt.show()
 
 # main
 if __name__ == '__main__':
-  test_scattering()
+  # photon processes and their interaction lengths
+  processes = {'scattering': 1.0, 'attenuation': 1.0}
+
+  test_scattering(processes)
 
   #events = []
   #for position in [(-0.5, 0.0), (0.0, 0.0), (0.5, 0.0)]:
