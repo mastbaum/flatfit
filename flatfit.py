@@ -20,11 +20,12 @@ absorption_length = 10
 scattering_length = 10
 
 # configuration
-tracking = True
+tracking = False
 debug = False
 debug_hardcore = False
 if debug_hardcore: debug = True
 
+# plotting functions
 def plot_hit_distribution_polar(ev, pos=None):
   '''polar plot of hit distribution for a single event'''
   npmts = len(ev.pmts)
@@ -66,45 +67,15 @@ def histogram_nhit(events):
 
 def histogram_q(events):
   npmts = len(events[0].pmts)
-  nhit = [0] * npmts
+  q = [0] * npmts
   for ev in events:
     for i in range(len(ev.pmts)):
-      nhit[i] += ev.pmts[i].q/len(events)
+      q[i] += ev.pmts[i].q/len(events)
   f = plt.figure(figsize=(2,2), facecolor='white')
   h = plt.hist(nhit, bins=100, log=False)
   plt.title('Charge distribution')
   plt.xlabel('Total charge in PMT')
   plt.ylabel('Counts')
-
-def histogram_mean_pe_all(q):
-  npmts = len(q)
-  cols = min(npmts, 5)
-  rows = math.ceil(npmts/cols)
-  f = plt.figure(figsize=(2,2), facecolor='white')
-  f.suptitle('PMT Charge Distributions', fontsize=18)
-  plt.subplots_adjust(hspace=0.4)
-  i = 0
-  while(i < npmts):
-    ax = plt.subplot(rows, cols, i+1)
-    ax.hist(q[i], bins=20, log=True)
-    ax.set_title('Charge dist., PMT ' + str(i), fontsize=12)
-    ax.set_xbound(0,2)
-    i += 1
-
-def histogram_time_all(t):
-  npmts = len(t)
-  cols = min(npmts, 5)
-  rows = math.ceil(npmts/cols)
-  f = plt.figure(figsize=(2,2), facecolor='white')
-  f.suptitle('PMT Timing Distributions', fontsize=18)
-  plt.subplots_adjust(hspace=0.4)
-  i = 0
-  while(i < npmts):
-    ax = plt.subplot(rows, cols, i+1)
-    ax.hist(t[i], bins=20)
-    ax.set_title('Time dist., PMT ' + str(i), fontsize=12)
-    ax.set_xbound(0,2)
-    i += 1
 
 def plot_pdfs(pdfs, pos=None):
   cols = min(npmts, 5)
@@ -161,6 +132,9 @@ class Hist2D:
 
 # analysis functions
 def make_pdfs(events):
+  '''creates from events (a list of Events) a list (one per pmt) of Hist2D
+  objects (which in turn hold a numpy.histogram2d).
+  '''
   n = len(events)
   q = [None] * npmts
   t = [None] * npmts
@@ -192,8 +166,9 @@ def pick_charge(mu=1.0, sigma=1.0):
   return max(0.0, q)
 
 def get_hit_pmt_position(position, theta):
-  '''given a photon position, picks a random momentum and find the distance to
-  the pmt it will hit, and the angle (in detector coordinates) to that pmt.
+  '''given a photon position and angle (in the photon's coordinates), finds the
+  position of the pmt it will hit. returns the distance to, angle to, and
+  coordinates of that pmt.
   '''
   event_x = position[0]
   event_y = position[1]
@@ -207,11 +182,20 @@ def get_hit_pmt_position(position, theta):
 
   return ray_len, (pmt_x, pmt_y), angle_to_pmt
 
+def get_random_position():
+  event_r = radius + 1
+  while event_r > radius:
+    event_x = radius*(2*random.random()-1)
+    event_y = radius*(2*random.random()-1)
+  return (event_x, event_y)
+
 def simulate(position, theta, photons_per_event, processes):
   '''simulate propagates optical photons to pmts.
 
-  input: position: either an (x,y) tuple or 'random'. the latter will result in
-                   a uniformly-distributed random location inside radius.
+  input: position: an (x,y) tuple, the position of the photon bomb
+
+         theta: an angle in radians, the starting momentum of the photon.
+                use 'random' for isotropic photons.
 
          photons_per_event: number of photons to throw at this location, cf.
                             a 'photon bomb'
@@ -223,15 +207,8 @@ def simulate(position, theta, photons_per_event, processes):
           objects (including unhit PMTs).
   '''
   event = Event()
-
-  if position == 'random':
-    event_r = radius + 1
-    while event_r > radius:
-      event_x = radius*(2*random.random()-1)
-      event_y = radius*(2*random.random()-1)
-  else:
-    event_x = position[0]
-    event_y = position[1]
+  event_x = position[0]
+  event_y = position[1]
 
   track_x = []
   track_y = []
@@ -239,6 +216,8 @@ def simulate(position, theta, photons_per_event, processes):
   for photon in range(photons_per_event):
     pos = (event_x, event_y)
     event_r = math.sqrt(event_x**2 + event_y**2)
+    if theta == 'random':
+      theta = random.vonmisesvariate(0, 0)
 
     if debug:
       print 'photon', photon
@@ -319,11 +298,11 @@ if __name__ == '__main__':
   processes['absorption'] = [random.expovariate(1.0 / absorption_length) for i in range(int(1e6))]
 
   events = []
-  for i in range(1):
+  for i in range(100):
     if i%10 == 0: print i
     pos = (0.5, 0.0)
     theta = random.vonmisesvariate(0, 0)
-    ev, tx, ty = simulate(pos, theta, 50, processes)
+    ev, tx, ty = simulate(pos, theta, 100, processes)
     events.append(ev)
 
     if tracking: plot_tracks(tx,ty)
@@ -340,7 +319,7 @@ def test_process(process, nphotons):
   for j in [1000, 100, 1, 0.1]:
     print process, 'length =', j, '...'
     processes[process] = [random.expovariate(1.0/j) for i in range(int(1e6))]
-    ev, tx, ty = simulate(position, 0.2, nphotons, processes)
+    ev, tx, ty = simulate(position, 'random', nphotons, processes)
     plot_hit_distribution_polar(ev, pos = 'lamba=' + str(j))
     f = plt.figure(figsize=(2,2), facecolor='white')
     plt.title('lambda='+str(j))
