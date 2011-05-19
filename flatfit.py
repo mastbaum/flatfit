@@ -10,6 +10,7 @@
 import sys
 import math, random
 import numpy
+from UserDict import UserDict
 from matplotlib import pyplot as plt
 from matplotlib import cm, colors
 from mpl_toolkits.mplot3d import Axes3D
@@ -22,7 +23,7 @@ attenuation_length = 10
 scattering_length = 10
 
 tracking = False
-debug = True
+debug = False
 debug_hardcore = False
 if debug_hardcore: debug = True
 
@@ -82,31 +83,6 @@ def histogram_q(events):
   h = plt.hist(nhit, bins=100, log=False)
   plt.title('Charge distribution')
   plt.xlabel('Total charge in PMT')
-  plt.ylabel('Counts')
-
-#def histogram_qpe(events):
-#  npmts = len(events[0].pmts)
-#  nhit = [0] * npmts
-#  for ev in events:
-#    for i in range(len(ev.pmts)):
-#      nhit[i] += (ev.pmts[i].q/ev.pmts[i].npe)/len(events)
-#  f = plt.figure(figsize=(2,2), facecolor='white')
-#  h = plt.hist(nhit, bins=100, log=False)
-#  plt.title('Charge distribution')
-#  plt.xlabel('Total charge in PMT')
-#  plt.ylabel('Counts')
-
-def histogram_mean_pe(l, pmtid):
-  fig3 = plt.figure(figsize=(2,2), facecolor='white')
-  plt.title('Charge histogram, PMT ' + str(pmtid))
-  plt.xlabel('Charge')
-  plt.ylabel('Counts')
-
-def histogram_time(l, pmtid):
-  fig3 = plt.figure(figsize=(2,2), facecolor='white')
-  h = plt.hist(l, bins=100, log=False)
-  plt.title('Timing histogram, PMT ' + str(pmtid))
-  plt.xlabel('Time')
   plt.ylabel('Counts')
 
 def histogram_mean_pe_all(q):
@@ -187,7 +163,10 @@ def get_hit_pmt_position(position):
   event_x = position[0]
   event_y = position[1]
   event_r = math.sqrt(event_x**2 + event_y**2)
-  theta = random.vonmisesvariate(0, 0)
+  if position == (0.0, 0.0):
+    theta = 0.0
+  else:
+    theta = random.vonmisesvariate(0, 0)
 
   a = 2.0 * (event_x*math.cos(theta) + event_y*math.sin(theta))
   ray_len = -a/2 + 0.5 * math.sqrt(a**2 - 4*(event_r**2 - radius**2))
@@ -214,7 +193,7 @@ def simulate(position, photons_per_event, processes):
   '''
   event = Event()
 
-  if position is 'random':
+  if position == 'random':
     event_r = radius + 1
     while event_r > radius:
       event_x = radius*(2*random.random()-1)
@@ -239,22 +218,28 @@ def simulate(position, photons_per_event, processes):
       track_y.append(event_y)
 
     reached_pmt = False
+    kill_photon = False
     while not reached_pmt:
       ray_len, theta, angle_to_pmt = get_hit_pmt_position(pos)
 
       interaction_lengths = {'pmt': ray_len}
       for process in processes:
-        interaction_lengths[process] = random.expovariate(processes[process])
+        try:
+          interaction_lengths[process] = processes[process].pop(0)
+        except IndexError:
+          print 'Ran out of numbers for process', process
+          sys.exit(1)
       process = min(interaction_lengths, key = interaction_lengths.get)
 
-      if process is 'pmt':
+      if process == 'pmt':
         reached_pmt = True
 
-      if process is 'absorption':
+      if process == 'absorption':
         if debug: print 'photon absorbed'
+        kill_photon = True
         break
 
-      if process is 'scattering':
+      if process == 'scattering':
         x = pos[0] + interaction_lengths[process] * math.cos(theta)
         y = pos[1] + interaction_lengths[process] * math.sin(theta)
         r = math.sqrt(x**2 + y**2)
@@ -277,6 +262,8 @@ def simulate(position, photons_per_event, processes):
           track_y.append(y)
 
         continue
+
+    if kill_photon: continue
  
     pmtid = int(math.floor((angle_to_pmt + math.pi) / (2 * math.pi) * npmts))
     if debug: print ' hit pmt', pmtid, math.degrees(angle_to_pmt)
@@ -292,30 +279,24 @@ def simulate(position, photons_per_event, processes):
 def spectrum_flat():
   return 100
 
-def test_scattering(processes):
-  position = (0.75, 0.0)
-  processes['attenuation'] = 100 * radius
-  for j in [100, 1, 0.1, 0.05]:
-    processes['scattering'] = j
-    ev, tx, ty = simulate(position, spectrum_flat(), processes)
-    plot_hit_distribution_polar(ev, pos=j) #position)
-  plt.show()
-
-def test_absorption():
-  position = (0.75, 0.0)
-  processes['scattering'] = 100 * radius
-  for j in [10, 1, 0.1, 0.05]:
-    processes['attenuation'] = j
-    ev, tx, ty = simulate(position, spectrum_flat(), processes)
-    plot_hit_distribution_polar(ev, pos=j) #position)
+def test_process(process, nphotons):
+  processes = {}
+  position = (0.0, 0.0)
+  for j in [1000, 100, 1, 0.1]:
+    print process, 'length =', j, '...'
+    processes[process] = [random.expovariate(1.0/j) for i in range(int(1e6))]
+    ev, tx, ty = simulate(position, nphotons, processes)
+    plot_hit_distribution_polar(ev, pos = 'lamba=' + str(j))
+    f = plt.figure(figsize=(2,2), facecolor='white')
+    plt.title('lambda='+str(j))
+    plt.xlim(-1,1)
+    plt.ylim(-1,1)
+    p = plt.plot(tx,ty,marker='o')
   plt.show()
 
 # main
 if __name__ == '__main__':
-  # photon processes and their interaction lengths
-  processes = {'scattering': 1.0, 'attenuation': 1.0}
-
-  test_scattering(processes)
+  test_process('scattering', nphotons=10)
 
   #events = []
   #for position in [(-0.5, 0.0), (0.0, 0.0), (0.5, 0.0)]:
